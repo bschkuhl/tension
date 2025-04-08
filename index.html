@@ -3,12 +3,14 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Spannungsprotokoll</title>
+  <title>Spannungsprotokoll - Drag & Drop</title>
   <!-- Include Tailwind CSS via CDN for styling -->
   <script src="https://cdn.tailwindcss.com"></script>
-  <!-- You can add custom CSS here if needed -->
   <style>
     /* Additional custom styles can go here */
+    .drop-target:hover {
+      outline: 2px dashed #60a5fa;
+    }
   </style>
 </head>
 <body>
@@ -21,7 +23,7 @@
   <!-- Babel to compile JSX on the fly -->
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
-  <!-- Your React component code -->
+  <!-- Your updated React component code -->
   <script type="text/babel">
     function TensionProtocol() {
       const days = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"];
@@ -53,11 +55,10 @@
         }
       }, []);
       
-      // Save data to localStorage and create auto-backup
+      // Save data and auto-backup whenever dataPoints changes.
       React.useEffect(() => {
         if (Object.keys(dataPoints).length > 0) {
           localStorage.setItem("tensionProtocolData", JSON.stringify(dataPoints));
-          // Auto-backup data
           autoBackupData();
         }
       }, [dataPoints]);
@@ -66,15 +67,10 @@
         const now = new Date();
         localStorage.setItem("lastBackupTime", now.toISOString());
         setLastBackupTime(now);
-        
         try {
-          // Create backup in localStorage
           localStorage.setItem("tensionProtocolData_backup", JSON.stringify(dataPoints));
-          
-          // Also try to download a backup file (once per day)
           const lastBackup = localStorage.getItem("lastFileBackupDate");
           const today = now.toDateString();
-          
           if (!lastBackup || lastBackup !== today) {
             exportData(true);
             localStorage.setItem("lastFileBackupDate", today);
@@ -84,37 +80,28 @@
         }
       };
       
+      // Create or remove a dot by clicking on a grid cell.
       const handlePointClick = (day, hour, level) => {
         const pointKey = `${day}-${hour}-${level}`;
-        
         if (selectedPoint === pointKey) {
           // Deselect if already selected
           setSelectedPoint(null);
           return;
         }
-        
-        // Check if there's already a point at this hour on this day
+        // Check if there's already a point in any level for this hour.
         const existingPointAtSameHour = Object.keys(dataPoints).find(key => {
           const [keyDay, keyHour] = key.split('-');
           return parseInt(keyDay) === day && parseInt(keyHour) === hour;
         });
-        
-        // If there is, remove it
         if (existingPointAtSameHour) {
           const newDataPoints = { ...dataPoints };
           delete newDataPoints[existingPointAtSameHour];
           setDataPoints(newDataPoints);
-          
-          // If we're clicking on the same point that existed, just delete it and exit
           if (existingPointAtSameHour === pointKey) {
             return;
           }
         }
-        
-        // Add the new point
         setSelectedPoint(pointKey);
-        
-        // Add point with an empty label
         setDataPoints(prev => ({
           ...prev,
           [pointKey]: {
@@ -124,10 +111,9 @@
         }));
       };
       
+      // Add or update label for the selected dot.
       const addLabel = () => {
         if (!selectedPoint) return;
-        
-        // Add or update the label for the selected point
         setDataPoints(prev => ({
           ...prev,
           [selectedPoint]: {
@@ -135,14 +121,13 @@
             label: labelInput.trim()
           }
         }));
-        
         setLabelInput("");
         setSelectedPoint(null);
       };
       
       const removePoint = (key) => {
         setDataPoints(prev => {
-          const newData = {...prev};
+          const newData = { ...prev };
           delete newData[key];
           return newData;
         });
@@ -158,18 +143,13 @@
       const exportData = (autoBackup = false) => {
         const dataStr = JSON.stringify(dataPoints, null, 2);
         const dataUri = `data:application/json;charset=utf-8,${encodeURIComponent(dataStr)}`;
-        
         const exportLink = document.createElement("a");
         exportLink.setAttribute("href", dataUri);
-        
-        // Add date to filename for auto backups
         const date = new Date().toISOString().split('T')[0];
         exportLink.setAttribute("download", autoBackup 
           ? `spannungsprotokoll_backup_${date}.json` 
           : "spannungsprotokoll_export.json"
         );
-        
-        // For auto backups, try to save without user interaction
         if (autoBackup) {
           try {
             exportLink.style.display = 'none';
@@ -180,7 +160,6 @@
             console.log("Auto-backup download blocked by browser");
           }
         } else {
-          // For manual exports, do the normal flow
           document.body.appendChild(exportLink);
           exportLink.click();
           document.body.removeChild(exportLink);
@@ -190,7 +169,6 @@
       const importData = (e) => {
         const file = e.target.files[0];
         if (!file) return;
-        
         const reader = new FileReader();
         reader.onload = (event) => {
           try {
@@ -218,19 +196,55 @@
           alert("Kein Backup verfügbar.");
         }
       };
+
+      // Drag-and-drop: record the data being dragged.
+      const handleDragStart = (e, day, hour, level) => {
+        const dragData = { day, hour, level };
+        e.dataTransfer.setData("application/json", JSON.stringify(dragData));
+        e.dataTransfer.effectAllowed = "move";
+      };
+
+      // Allow dropping by preventing default.
+      const handleDragOver = (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+      };
+
+      // On drop, update dot position if the drop target is empty.
+      const handleDrop = (e, targetDay, targetHour, targetLevel) => {
+        e.preventDefault();
+        const data = e.dataTransfer.getData("application/json");
+        if (!data) return;
+        const { day, hour, level } = JSON.parse(data);
+        // Allow moving only within the same day and hour (vertical movement)
+        if (day !== targetDay || hour !== targetHour) {
+          return;
+        }
+        const targetKey = `${targetDay}-${targetHour}-${targetLevel}`;
+        // Do nothing if target cell already has a dot.
+        if (dataPoints[targetKey]) return;
+        const oldKey = `${day}-${hour}-${level}`;
+        const dotData = dataPoints[oldKey];
+        if (!dotData) return;
+        // Remove the old dot and set new position.
+        setDataPoints(prev => {
+          const newData = { ...prev };
+          delete newData[oldKey];
+          newData[targetKey] = dotData;
+          return newData;
+        });
+      };
       
-      // Calculate background color based on level
+      // Calculate the background color based on the level.
       const getLevelBackgroundColor = (levelIdx) => {
-        // From light gray (low tension) to dark gray (high tension)
         const intensity = Math.round(230 - (levelIdx * (230 - 150) / (totalLevels - 1)));
         return `rgb(${intensity}, ${intensity}, ${intensity})`;
       };
       
-      // Check if this time slot already has a dot
+      // Check if a time slot (for a given hour) already has a dot in a different level.
       const isTimeSlotOccupied = (day, hour, currentLevelIdx) => {
         for (let levelIdx = 0; levelIdx < totalLevels; levelIdx++) {
           if (levelIdx === currentLevelIdx) continue;
-          
           const key = `${day}-${hour}-${levelIdx}`;
           if (dataPoints[key]) {
             return true;
@@ -292,10 +306,8 @@
               {/* Level markers */}
               <div className="w-10 border-r border-gray-300">
                 {Array.from({ length: totalLevels }).map((_, idx) => {
-                  // Only show level marker labels at specific positions
                   const levelIndex = Math.floor(idx * (levelMarkers.length - 1) / (totalLevels - 1));
                   const showLabel = idx === Math.round(levelIndex * (totalLevels - 1) / (levelMarkers.length - 1));
-                  
                   return (
                     <div 
                       key={idx} 
@@ -313,7 +325,7 @@
                 })}
               </div>
               
-              {/* Grid */}
+              {/* Grid for each level (rows) and hour (columns) */}
               <div className="flex-1">
                 {Array.from({ length: totalLevels }).map((_, levelIdx) => (
                   <div 
@@ -327,25 +339,32 @@
                     {hours.map(hour => {
                       const pointKey = `${activeDay}-${hour}-${levelIdx}`;
                       const hasPoint = dataPoints[pointKey];
+                      // Determine if there is a dot already in this hour (but in a different level)
                       const isOtherDotAtSameTime = isTimeSlotOccupied(activeDay, hour, levelIdx);
-                      
                       return (
                         <div 
                           key={hour}
-                          className={`h-full border-r border-gray-200 relative
+                          className={`h-full border-r border-gray-200 relative drop-target
                             ${isOtherDotAtSameTime ? 'cursor-not-allowed' : 'cursor-pointer'}
                             ${selectedPoint === pointKey ? 'bg-blue-100' : ''}`}
                           style={{
                             width: `${100 / hours.length}%`
                           }}
                           onClick={() => {
-                            if (!isOtherDotAtSameTime || hasPoint) {
+                            // If cell is empty, allow new dot creation.
+                            if (!dataPoints[pointKey] && !isOtherDotAtSameTime) {
                               handlePointClick(activeDay, hour, levelIdx);
                             }
                           }}
+                          onDragOver={handleDragOver}
+                          onDrop={(e) => handleDrop(e, activeDay, hour, levelIdx)}
                         >
                           {hasPoint && (
-                            <div className="absolute w-3 h-3 bg-blue-600 rounded-full top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2">
+                            <div 
+                              className="absolute w-3 h-3 bg-blue-600 rounded-full top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2"
+                              draggable
+                              onDragStart={(e) => handleDragStart(e, activeDay, hour, levelIdx)}
+                            >
                               {hasPoint.label && (
                                 <div
                                   className="absolute -top-8 left-1/2 transform -translate-x-1/2 bg-gray-800 text-white text-xs p-1 rounded whitespace-nowrap z-10"
@@ -416,10 +435,10 @@
               <li>E = Extrem (oberer Bereich)</li>
             </ul>
             <p className="mt-2">
-              Klicken Sie einfach auf einen Punkt im Raster, um ihn zu markieren. Pro Zeitpunkt kann nur ein Spannungswert eingetragen werden. Sie können optional eine Beschreibung hinzufügen, indem Sie Text eingeben und auf "Hinzufügen" klicken.
+              Klicken Sie auf eine leere Zelle, um einen neuen Punkt zu setzen. Um einen Punkt zu verschieben, ziehen Sie ihn vertikal (innerhalb der gleichen Stunde). Es kann immer nur ein Punkt pro Stunde vorhanden sein. Optional können Sie eine Beschreibung hinzufügen, indem Sie Text eingeben und auf "Hinzufügen" klicken.
             </p>
             <p className="mt-2 text-sm">
-              <strong>Hinweis:</strong> Ihre Daten werden automatisch gespeichert. Für zusätzliche Sicherheit werden regelmäßig Backups erstellt, die Sie über den "Backup"-Button wiederherstellen können.
+              <strong>Hinweis:</strong> Ihre Daten werden automatisch gespeichert und regelmäßig gesichert.
             </p>
           </div>
         </div>
